@@ -5,6 +5,7 @@
 import pathlib
 import sys
 import enum
+from typing import List, Optional
 
 class OutputStyle(enum.Enum):
     CSV = 0
@@ -12,7 +13,7 @@ class OutputStyle(enum.Enum):
 BORDER_CORNER_SEPARATOR = "+"
 COLUMN_SEPARATOR = "|"
 
-def read_contents(fpath: pathlib.Path) -> list[list[str]]:
+def read_contents(fpath: pathlib.Path) -> List[List[str]]:
     """ Reads the results file at the specified path and parses the data into a
     tabular format.
 
@@ -36,8 +37,8 @@ def read_contents(fpath: pathlib.Path) -> list[list[str]]:
         print(f"Unable to read file contents.\r\n{e}")
         sys.exit(1)
 
-    tests: list[list[str]] = []
-    headers: list[str] = []
+    tests: List[List[str]] = []
+    headers: List[str] = []
     # Remove all lines until the first empty line
     if contents and not contents[0].startswith(BORDER_CORNER_SEPARATOR):
         while contents:
@@ -63,7 +64,7 @@ def read_contents(fpath: pathlib.Path) -> list[list[str]]:
     headers = headers[:max_len]
     return [headers] + [t[:max_len] for t in tests]
 
-def main(fpath: pathlib.Path, output: OutputStyle, to_stdout: bool = True) -> None | str:
+def main(fpath: pathlib.Path, output: OutputStyle, to_stdout: bool = True) -> Optional[str]:
     """ Parses a QEMU OpenTItan Earlgrey test results output file and transforms
     the data into a specified format which is then output. Directly prints to
     stdout and so does not return anything.
@@ -76,7 +77,7 @@ def main(fpath: pathlib.Path, output: OutputStyle, to_stdout: bool = True) -> No
     Returns: Either "None" if printing to stdout (default), or a string containing the
     formatted output.
     """
-    results: list[list[str]] = read_contents(fpath)
+    results: List[List[str]] = read_contents(fpath)
     headers, tests = results[0], results[1:]
 
     # Format in the requested output style

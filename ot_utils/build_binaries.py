@@ -9,6 +9,7 @@ import glob
 import shutil
 import subprocess
 from parse_results import OutputStyle, main as parse_results
+from typing import List
 
 PARSE_RESULTS_SCRIPT_PATH = pathlib.Path(__file__).parent.joinpath("parse_results.py")
 OUT_DIR = pathlib.Path(__file__).parent.parent.joinpath("ot_test")
@@ -60,7 +61,7 @@ OVERRIDE_MAPPINGS = {
     "status_report_test_fpga_cw310_test_rom": "//sw/device/tests:status_report_test",
 }
 
-def build_tests(ot_path: str, targets: list[str], output_missing: bool = False, cache: bool = True, mapping: bool = False, fetch_all: bool = False) -> None:
+def build_tests(ot_path: str, targets: List[str], output_missing: bool = False, cache: bool = True, mapping: bool = False, fetch_all: bool = False) -> None:
     """ TODO: docstring this function, and modularise a lot more """
     cwd = os.getcwd()
     missing = []
