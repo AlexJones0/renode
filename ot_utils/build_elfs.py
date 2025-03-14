@@ -12,14 +12,14 @@ from parse_results import OutputStyle, main as parse_results
 from typing import List
 
 PARSE_RESULTS_SCRIPT_PATH = pathlib.Path(__file__).parent.joinpath("parse_results.py")
-OUT_DIR = pathlib.Path(__file__).parent.parent.joinpath("ot_test")
+OUT_DIR = pathlib.Path(__file__).parent.parent.joinpath("ot_test_all")
 DEFAULT_TEST_LOCATION = "//sw/device/tests"
 DEBUG_LOG = False
 ALLOWED_ENVS = ["fpga_cw310_rom_with_fake_keys", "fpga_cw310_test_rom", "fpga_cw310_sival"]
-BINARY_SUFFIX = {
-    "fpga_cw310_rom_with_fake_keys": ".*.signed.bin",
-    "fpga_cw310_test_rom": ".bin",
-    "fpga_cw310_sival": ".*.signed.bin",
+ELF_SUFFIX = {
+    "fpga_cw310_rom_with_fake_keys": "*.elf",
+    "fpga_cw310_test_rom": "*.elf",
+    "fpga_cw310_sival": "*.elf",
 }
 
 # Manual override mappings to handle cases where automated test retrieval fails because
@@ -60,6 +60,9 @@ OVERRIDE_MAPPINGS = {
     "sram_ctrl_sleep_sram_ret_contents_test": "//sw/device/tests:sram_ctrl_sleep_sram_ret_contents_no_scramble_test",
     "status_report_test_fpga_cw310_test_rom": "//sw/device/tests:status_report_test",
 }
+IGNORE_TESTS = set([
+    "power_virus_systemtest"
+])
 
 def build_tests(ot_path: str, targets: List[str], output_missing: bool = False, cache: bool = True, mapping: bool = False, fetch_all: bool = False) -> None:
     """ TODO: docstring this function, and modularise a lot more """
@@ -67,11 +70,11 @@ def build_tests(ot_path: str, targets: List[str], output_missing: bool = False, 
     missing = []
 
     # Remove repeated targets (if the same test name is used in multiple places)
-    # Retain ordering whilst doing so
+    # Retain ordering whilst doing so. Also remove ignored targets.
     index = 0
     seen = set([])
     while index < len(targets):
-        if targets[index] in seen:
+        if targets[index] in seen or targets[index] in IGNORE_TESTS:
             targets = targets[:index] + targets[(index+1):]
         else:
             seen.add(targets[index])
@@ -112,13 +115,13 @@ def build_tests(ot_path: str, targets: List[str], output_missing: bool = False, 
                     env = "_" + env
                     if target.endswith(env):
                         target_name = target.removesuffix(env)
-                        if target_name not in targets:
+                        if target_name not in targets and target_name.split(":")[1] not in IGNORE_TESTS:
                             targets.append(target_name)
                         break
 
         for i, target in enumerate(targets):
-            # Renaming support for binaries of tests with the same name, in different BUILD files
-            same_bin_name = True
+            # Renaming support for elf files of tests with the same name, in different BUILD files
+            same_elf_name = True
             extra_outputs = []
             if isinstance(target, dict):
                 for attr in ["name"]:
@@ -126,30 +129,30 @@ def build_tests(ot_path: str, targets: List[str], output_missing: bool = False, 
                         print(f"Error in OVERRIDE_MAPPINGS - target missing `{attr}` attribute: {target}")
                         sys.exit(1)
                 if "rename" in target:
-                    bin_name = target["rename"]
-                    same_bin_name = False
+                    elf_name = target["rename"]
+                    same_elf_name = False
                 else:
-                    same_bin_name = True
+                    same_elf_name = True
                 if "extra_outputs" in target:
                     extra_outputs = [o for o in target["extra_outputs"]]
                 target = target["name"]
 
             # More aggressive caching to skip all bazel queries: try all exec envs combos and check
-            # for existing signed binaries
+            # for existing elf files
             target_path = target.split("//")[-1].replace(":","/")
             target_name = target_path.split("/")[-1]
-            if same_bin_name:
-                bin_name = target_name
-            binaries = []
+            if same_elf_name:
+                elf_name = target_name
+            elfs = []
             if cache and not extra_outputs:
                 # Limititation - we don't cache for now if we need extra test outputs. Functionality
                 # to search for these additional files in our out directory (and to cache these) as
                 # well needs appropriate support in this check.
                 for env in ALLOWED_ENVS:
-                    binaries = glob.glob(str(OUT_DIR.joinpath(f"{bin_name}_{env}*")))
-                    if binaries:
+                    elfs = glob.glob(str(OUT_DIR.joinpath(f"{elf_name}_{env}*")))
+                    if elfs:
                         break
-                if binaries:
+                if elfs:
                     if DEBUG_LOG:
                         print((f"[{i+1}/{len(targets)}] Skipping {target} - already cached"))
                     continue
@@ -172,20 +175,20 @@ def build_tests(ot_path: str, targets: List[str], output_missing: bool = False, 
 
             # Use the first valid target found, where such a target exists
             exec_target = None
-            binary_suffix = None
+            elf_suffix = None
 
             # Prioritise `ALLOWED_ENVS` ordering over Bazel's ordering
             for env in ALLOWED_ENVS:
-                for target in envs:
-                    if target.endswith(env):
-                        exec_target = target
-                        binary_suffix = BINARY_SUFFIX[env]
+                for e_target in envs:
+                    if e_target.endswith(env):
+                        exec_target = e_target
+                        elf_suffix = ELF_SUFFIX[env]
                         break
                 if exec_target is not None:
                     break
             if exec_target is None:
                 if output_missing:
-                    missing.append(f"{target}: no valid exec env")
+                    missing.append(f"{target}: no valid exec env / target does not exist")
                 continue
 
             if mapping:
@@ -193,8 +196,8 @@ def build_tests(ot_path: str, targets: List[str], output_missing: bool = False, 
                 continue
 
             # Check if the target already exists - assume no test changes and so skip
-            binaries = glob.glob(str(OUT_DIR.joinpath(bin_name)) + "*.bin")
-            if binaries:
+            elfs = glob.glob(str(OUT_DIR.joinpath(elf_name)) + "*.elf")
+            if elfs:
                 if cache and not extra_outputs:
                     # Limititation - we don't cache for now if we need extra test outputs. Functionality
                     # to search for these additional files in our out directory (and to cache these) as
@@ -202,8 +205,8 @@ def build_tests(ot_path: str, targets: List[str], output_missing: bool = False, 
                     if DEBUG_LOG:
                         print(f"[{i+1}/{len(targets)}] Skipping {target} - already cached")
                     continue
-                # Remove existing binary so it can be replaced
-                os.remove(binaries[0])
+                # Remove existing ELF File so it can be replaced
+                os.remove(elfs[0])
 
             # Build the test for the found execution environment
             target_command = ["./bazelisk.sh", "build", "--define", "bitstream=skip", exec_target]
@@ -226,39 +229,42 @@ def build_tests(ot_path: str, targets: List[str], output_missing: bool = False, 
                     continue
 
 
-            # Copy the binaries to OUT_DIR
+            # Copy the ELF files to OUT_DIR
             target_path = exec_target.split("//")[-1].replace(":","/")
-            runfiles = pathlib.Path("bazel-bin").joinpath(target_path + ".bash.runfiles")
-            runfiles = runfiles.joinpath("_main")
-            signed_bin_path = runfiles.joinpath(target_path + binary_suffix)
-            binaries = glob.glob(str(signed_bin_path))
-            if not binaries:
+            target_path = target_path[:-len(env)-1] + "_prog_fpga_cw310"
+            build_files = pathlib.Path("bazel-out")
+            build_files = build_files.joinpath("k8-fastbuild-ST-*")
+            build_files = build_files.joinpath("bin")
+            elf_path = build_files.joinpath(target_path + elf_suffix)
+            elfs = glob.glob(str(elf_path))
+            if not elfs:
                 if output_missing:
-                    missing.append(f"{target}: could not find binaries ({exec_target})")
+                    missing.append(f"{target}: could not find ELF file ({exec_target})")
                 continue
             if DEBUG_LOG:
-                print(f"[{i+1}/{len(targets)}] Found built binary: {binaries[0]}")
+                print(f"[{i+1}/{len(targets)}] Found built ELF file: {elfs[0]}")
             try:
-                # Delete the binary if it already exists
-                dest_bin = [f"{bin_name}_{env}"] + pathlib.Path(binaries[0]).name.split(".")[1:]
-                dest = OUT_DIR.joinpath(".".join(dest_bin))
+                # Delete the ELF File if it already exists
+                dest_elf = [f"{elf_name}_{env}"] + pathlib.Path(elfs[0]).name.split(".")[1:]
+                dest = OUT_DIR.joinpath(".".join(dest_elf))
                 if os.path.exists(dest):
-                    print(f"[{i+1}/{len(targets)}] Removing existing binary: {dest}")
+                    print(f"[{i+1}/{len(targets)}] Removing existing ELF file: {dest}")
                     os.remove(dest)
-                # Copy the binary over
-                shutil.copy(binaries[0], dest)
+                # Copy the ELF file over
+                print(elfs[0], dest)
+                shutil.copy(elfs[0], dest)
             except Exception as e:
-                print(f"Error copying signed binary: {e}")
+                print(f"Error copying ELF file: {e}")
                 sys.exit(1)
 
             # If the Mask ROM and OTP don't already exist, copy them over as well
-            mask_rom_path = runfiles.joinpath("sw/device/silicon_creator/rom/mask_rom_fpga_cw310.elf")
+            """mask_rom_path = runfiles.joinpath("sw/device/silicon_creator/rom/mask_rom_fpga_cw310.elf")
             dest = OUT_DIR.joinpath("mask_rom_fpga_cw310.elf")
             try:
                 if not os.path.exists(dest) and os.path.exists(mask_rom_path):
                     if DEBUG_LOG:
                         print(f"[{i+1}/{len(targets)}] `mask_rom_fpga_cw310.elf` does not exist. Copying Mask ROM.")
-                    shutil.copy(mask_rom_path, OUT_DIR)
+                    shutil.copy(mask_rom_path, OUT_DIR)c
             except Exception as e:
                 print(f"Error copying Mask ROM: {e}")
                 sys.exit(1)
@@ -271,9 +277,11 @@ def build_tests(ot_path: str, targets: List[str], output_missing: bool = False, 
                     shutil.copy(otp_path, OUT_DIR)
             except Exception as e:
                 print(f"Error copying OTP: {e}")
-                sys.exit(1)
+                sys.exit(1)"""
 
             # Copy any other extra output files specified by the target as well
+            runfiles = pathlib.Path("bazel-bin").joinpath(target_path + ".bash.runfiles")
+            runfiles = runfiles.joinpath("_main")
             for output in extra_outputs:
                 output_path = runfiles.joinpath(output)
                 output_name = pathlib.Path(output).name
@@ -286,7 +294,7 @@ def build_tests(ot_path: str, targets: List[str], output_missing: bool = False, 
                 except Exception as e:
                     print(f"Error copying output `{output_name}`: {e}")
                     sys.exit(1)
-                
+
         os.chdir(cwd)
     except Exception as e:
         print(f"An error occured when trying to run Bazel: {e}")
@@ -306,7 +314,7 @@ def main(ot_path: pathlib.Path, fpath: pathlib.Path, output_missing: bool = Fals
         fpath (pathlib.Path): The path to the file to read the contents of.
         output_missing (bool, default False): Whether to output missing tests.
         cache (bool, default False): Whether to allow caching (do not rebuild
-        binaries that already exist).
+        ELF files that already exist).
         mapping (bool, default False): Whether to just output the computed
         test mappings, and do nothing else
     """
@@ -326,15 +334,15 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='Builds binaries using Bazel for a specified set of Opentitan tests'
+        description='Builds ELF files using Bazel for a specified set of Opentitan tests'
     )
     parser.add_argument('ot_path', help="The path to the root directory of OpenTitan to use.")
     parser.add_argument('filename', help="The path to the file containing the old test results.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Output verbose logging messages.")
     parser.add_argument("-m", "--missing", action="store_true", help="Whether to output missing tests (true) or not.")
     parser.add_argument("-M", "--mapping", action="store_true", help="Enable to just output the mappings used, and do nothing else.")
-    parser.add_argument("-c", "--no_cache", action="store_true", help="If true, will rebuild any existing binaries.")
-    parser.add_argument("-a", "--fetch-all", action="store_true", help="As well as the past results, fetch *all* binaries that can be found.")
+    parser.add_argument("-c", "--no_cache", action="store_true", help="If true, will rebuild any existing ELF files.")
+    parser.add_argument("-a", "--fetch-all", action="store_true", help="As well as the past results, fetch *all* ELF files that can be found.")
 
     # Parse command-line arguments
     args = parser.parse_args()
