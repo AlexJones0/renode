@@ -54,6 +54,7 @@ STDOUT_STRS = {
 }
 
 # Formatting Parameters and Colour Configuration
+LOG_LINE_SEPARATOR = "  \\n  "
 TEST_INDENTATION = 2
 TEXT_COLOURS = {
     "RED": "\033[91m",
@@ -109,6 +110,7 @@ class OutputStyle(Enum):
     """Implemented output formats."""
 
     CSV = 0
+    Table = 1
 
 
 class RenodeTest(object):
@@ -538,7 +540,7 @@ def run_test(elf: pathlib.Path, index: int, num_tests: int) -> Optional[List[str
         exec_time: str = "{:.2f}".format(proc.exec_time())
         results: List[str] = [test_name, result_status, exec_time]
         if LAST_N_LINES > 0:
-            log_suffix: str = "  \\n  ".join(
+            log_suffix: str = LOG_LINE_SEPARATOR.join(
                 line.replace(",", "")  # Assumes CSV output for now
                 for line in proc_output[-LAST_N_LINES:]
             )
@@ -588,6 +590,80 @@ def run_tests(elf_patterns: List[pathlib.Path]) -> List[List[str]]:
     return results
 
 
+def output_as_table(headers: List[str], results: List[List[str]]) -> str:
+    """Format a CSV output as a visual table.
+
+    Args:
+        headers (List[str]): The list of table headers to use.
+        results (List[List[str]]): _description_
+
+    Returns:
+        str: _description_
+    """
+    col_sizes: List[int] = [len(h) for h in headers]
+    for col in range(len(col_sizes)):
+        for result in results:
+            col_sizes[col] = max(col_sizes[col], len(result[col]))
+    col_sizes = [min(col, 100) for col in col_sizes]
+    lalign: List[int] = [0, 3]  # Subset of column indexes to left-align
+
+    def separator_line(chr: str) -> str:
+        """Format an output table line containing a separator, between data.
+
+        Args:
+            chr (str): The character to use as the separator.
+
+        Returns:
+            str: The table row output line.
+        """
+        return "+" + "+".join(chr * (size + 2) for size in col_sizes) + "+"
+
+    def row_line(data: List[str]) -> str:
+        """Format an output table line containing a row of data.
+
+        Args:
+            data (List[str]): The data in the given table row.
+
+        Returns:
+            str: The table row output line.
+        """
+        lines = ""
+        contents = data.copy()
+        while any(val != "" for val in contents):
+            lines += "| "
+            for col, val in enumerate(contents):
+                left_align = col in lalign
+                part_length: int = len(val)
+                if part_length > 100:
+                    part_length = 100
+                part = val[:part_length]
+                if LOG_LINE_SEPARATOR in part:
+                    part_length = part.index(LOG_LINE_SEPARATOR)
+                    part = part[:part_length]
+                    contents[col] = val[part_length + len(LOG_LINE_SEPARATOR) :]
+                else:
+                    contents[col] = val[part_length:]
+                padding: str = " " * (col_sizes[col] - part_length)
+                if col != 0:
+                    lines += " | "
+                if left_align:
+                    lines += part + padding
+                else:
+                    lines += padding + part
+            lines += " |\r\n"
+        return lines.strip()
+
+    # Construct and return the results table
+    lines = [
+        separator_line("-"),
+        row_line(headers),
+        separator_line("="),
+    ]
+    for result in results:
+        lines += [row_line(result), separator_line("-")]
+    return "\r\n".join(lines)
+
+
 def main(
     elf_patterns: List[pathlib.Path], output: OutputStyle, to_stdout: bool = True
 ) -> Optional[str]:
@@ -614,14 +690,18 @@ def main(
         headers.append("end_of_log")
 
     # Format in the requested output style
-    ret: str = ""
     if output is OutputStyle.CSV:
+        ret: str = ""
         for line in [headers] + results:
             line_out: str = ",".join(line)
             if to_stdout:
                 print(line_out)
             else:
                 ret += line_out + "\r\n"
+    elif output is OutputStyle.Table:
+        ret = output_as_table(headers, results)
+        if to_stdout:
+            print(ret)
 
     if not to_stdout:
         return ret.strip()
@@ -635,13 +715,15 @@ if __name__ == "__main__":
         description="Run OpenTitan tests from their ELF files with Renode."
     )
     parser.add_argument(
-        "elfs", nargs="*", help="A glob rule to match for test ELFs that should be run."
+        "elfs",
+        nargs="*",
+        help="A list of glob rules to match for test ELFs that should be run.",
     )
     parser.add_argument(
         "-o",
         "--output",
-        choices=["CSV"],
-        default="CSV",
+        choices=["CSV", "Table"],
+        default="Table",
         help="The format the script should output in.",
     )
     parser.add_argument(
@@ -696,7 +778,9 @@ if __name__ == "__main__":
     USE_TIMEOUT_OVERRIDES = not args.no_overrides
 
     elfs = [pathlib.Path(elf_path) for elf_path in args.elfs]
-    output_styles = defaultdict(lambda: OutputStyle.CSV, {"CSV": OutputStyle.CSV})
+    output_styles = defaultdict(
+        lambda: OutputStyle.Table, {"CSV": OutputStyle.CSV, "Table": OutputStyle.Table}
+    )
     output = output_styles[args.output]
 
     main(elfs, output)
